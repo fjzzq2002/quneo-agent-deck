@@ -262,6 +262,40 @@ struct Bar {
     let desc: String
     let updated: Double
     var remote: String? = nil
+    var pid: Int = 0
+}
+
+// Notify when a process STARTS showing tqdm bars. Keyed per process (not
+// per bar) so epoch-loop bars that recreate constantly don't spam; a
+// process must go bar-silent for 2 minutes before it announces again.
+var barSeenAt: [String: Double] = [:]
+
+func notifyBanner(title: String, message: String) {
+    let clean = { (s: String) in s.replacingOccurrences(of: "\"", with: "'")
+        .replacingOccurrences(of: "\\", with: "") }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    p.arguments = ["-e", "display notification \"\(clean(message))\" with title \"\(clean(title))\""]
+    try? p.run()
+}
+
+func checkNewBars(startupGrace: Bool) {
+    let now = Date().timeIntervalSince1970
+    for b in currentBars {
+        let key = "\(b.remote ?? "local"):\(b.pid)"
+        let last = barSeenAt[key]
+        barSeenAt[key] = now
+        guard !startupGrace else { continue }
+        if last == nil || now - last! > 120 {
+            let place = b.remote.map { " on \($0)" } ?? ""
+            notifyBanner(title: "tqdm started\(place)",
+                         message: b.desc.isEmpty ? "a progress bar is running" : b.desc)
+            deckLog("tqdm started: \(key) '\(b.desc)'")
+        }
+    }
+    if barSeenAt.count > 500 {
+        barSeenAt = barSeenAt.filter { now - $0.value < 3600 }
+    }
 }
 
 var remoteBars: [Bar] = []
@@ -284,7 +318,8 @@ func loadLocalBars() -> [Bar] {
             continue
         }
         if now - updated > 6 * 3600 { continue }
-        bars.append(Bar(frac: frac, desc: obj["desc"] as? String ?? "", updated: updated))
+        bars.append(Bar(frac: frac, desc: obj["desc"] as? String ?? "", updated: updated,
+                        pid: (obj["pid"] as? NSNumber)?.intValue ?? 0))
     }
     return bars
 }
@@ -532,7 +567,8 @@ func pollRemotes() {
                     frac: frac,
                     desc: b["desc"] as? String ?? "",
                     updated: (b["updated"] as? NSNumber)?.doubleValue ?? 0,
-                    remote: host
+                    remote: host,
+                    pid: (b["pid"] as? NSNumber)?.intValue ?? 0
                 ))
             }
             for obj in arr {
@@ -1706,6 +1742,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if tick % 20 == 1 { updateSystemStats() }  // every 5s
         currentBars = (loadLocalBars() + remoteBars).sorted { $0.updated > $1.updated }
+        checkNewBars(startupGrace: tick < 3)  // don't announce bars that predate the app
         let sessions = loadSessions() + remoteSessions
         captureWindowsForNewSessions(sessions)
         padSlots = assignPads(sessions)
