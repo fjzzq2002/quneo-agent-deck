@@ -35,6 +35,12 @@ window for anything else — including cluster sessions.
 - **they're also buttons**: tap left = F13 (bind to your dictation app),
   tap right = Return, both together = Esc
 
+**4 horizontal sliders = machine vitals** — LED bars for CPU, RAM, disk,
+battery (top to bottom, refreshed every 5s).
+
+**Long slider = the day itself** — a single dot crawling left to right,
+showing the fraction of the day elapsed. A tiny sun.
+
 **4 vertical sliders = tentacles**
 
 - ambient display: slow breathing when idle, VU-dance scaled by how many

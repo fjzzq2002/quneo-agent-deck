@@ -183,11 +183,84 @@ func allPadsOff() {
     for i in 0..<16 { setPad(i, green: 0, red: 0) }
 }
 
-// Clear pads (notes 0-31), side-button LEDs (33-49), sliders (CC1-5) and
-// rotaries (CC6-7) to a known state.
+// Clear pads (notes 0-31), side-button LEDs (33-49), and all slider/rotary
+// LEDs (CC1-11) to a known state.
 func clearAllLEDs() {
     for n: UInt8 in 0...49 { lastSent[n] = nil; sendNote(n, 0) }
-    for c: UInt8 in 1...7 { lastCC[c] = nil; sendCC(c, 0) }
+    for c: UInt8 in 1...11 { lastCC[c] = nil; sendCC(c, 0) }
+}
+
+// --- System vitals on the horizontal sliders -----------------------------
+// The four horizontal sliders (LED fill via CC11 top ... CC8 bottom) show
+// CPU, RAM, disk, battery. The long slider (CC5, a positional dot) shows
+// the fraction of the day elapsed — a little sun crawling left to right.
+var statCPU = 0.0
+var statRAM = 0.0
+var statDisk = 0.0
+var statBattery = 0.0
+var statsInFlight = false
+
+func updateSystemStats() {
+    guard !statsInFlight else { return }
+    statsInFlight = true
+    DispatchQueue.global(qos: .utility).async {
+        // CPU: sum of per-process %CPU, normalized by core count.
+        let cpuSum = runCmd("/bin/ps", ["-A", "-o", "%cpu="])
+            .split(separator: "\n")
+            .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            .reduce(0, +)
+        let cpu = min(1.0, cpuSum / Double(ProcessInfo.processInfo.activeProcessorCount) / 100.0)
+
+        // RAM: (active + wired + compressor) pages / total.
+        let vm = runCmd("/usr/bin/vm_stat", [])
+        func pages(_ label: String) -> Double {
+            guard let r = vm.range(of: "Pages \(label): *(\\d+)", options: .regularExpression)
+            else { return 0 }
+            return Double(vm[r].split(separator: " ").last.map(String.init) ?? "") ?? 0
+        }
+        var pageSize = 16384.0
+        if let r = vm.range(of: "page size of (\\d+)", options: .regularExpression),
+           let p = Double(vm[r].split(separator: " ")[3]) { pageSize = p }
+        let memTotal = Double(runCmd("/usr/sbin/sysctl", ["-n", "hw.memsize"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let usedBytes = (pages("active") + pages("wired down") + pages("occupied by compressor")) * pageSize
+        let ram = memTotal > 0 ? min(1.0, usedBytes / memTotal) : 0
+
+        // Disk: used fraction of /.
+        var disk = 0.0
+        if let attrs = try? FileManager.default.attributesOfFileSystem(forPath: "/"),
+           let total = (attrs[.systemSize] as? NSNumber)?.doubleValue,
+           let free = (attrs[.systemFreeSize] as? NSNumber)?.doubleValue, total > 0 {
+            disk = 1.0 - free / total
+        }
+
+        // Battery: pmset (0 on desktops — bottom bar just stays dark).
+        var battery = 0.0
+        let batt = runCmd("/usr/bin/pmset", ["-g", "batt"])
+        if let r = batt.range(of: "(\\d+)%", options: .regularExpression),
+           let pct = Double(batt[r].dropLast()) {
+            battery = pct / 100.0
+        }
+
+        DispatchQueue.main.async {
+            statCPU = cpu
+            statRAM = ram
+            statDisk = disk
+            statBattery = battery
+            statsInFlight = false
+        }
+    }
+}
+
+func paintSystemStats() {
+    func level(_ v: Double) -> UInt8 { UInt8(max(0, min(127, v * 127))) }
+    sendCC(11, level(statCPU))
+    sendCC(10, level(statRAM))
+    sendCC(9, level(statDisk))
+    sendCC(8, level(statBattery))
+    let midnight = Calendar.current.startOfDay(for: Date())
+    let dayFrac = Date().timeIntervalSince(midnight) / 86_400.0
+    sendCC(5, level(dayFrac))
 }
 
 // The four vertical sliders under the eyes are the deck's pulse (LED fill
@@ -1549,7 +1622,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         allPadsOff()
-        for c: UInt8 in 1...7 { sendCC(c, 0) }
+        for c: UInt8 in 1...11 { sendCC(c, 0) }
     }
 
     var attention: Bool { padSlots.contains { $0?.status == "attention" } }
@@ -1562,6 +1635,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             pollRemotes()
             scanCodex()
         }
+        if tick % 20 == 1 { updateSystemStats() }  // every 5s
         let sessions = loadSessions() + remoteSessions
         captureWindowsForNewSessions(sessions)
         padSlots = assignPads(sessions)
@@ -1583,6 +1657,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 setPad(i, green: 0, red: 0)
             }
         }
+        paintSystemStats()
     }
 
     func colors(for status: String) -> (green: UInt8, red: UInt8) {
