@@ -1,0 +1,11 @@
+{
+  "name": "quneo-deck-bridge",
+  "displayName": "QuNeo Deck Bridge",
+  "publisher": "ziqian",
+  "version": "0.1.0",
+  "description": "Lets the QuNeo Agent Deck focus the exact terminal hosting a Claude session.",
+  "engines": { "vscode": "^1.70.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {}
+}
