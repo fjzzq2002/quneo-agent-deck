@@ -83,6 +83,19 @@ for extdir in "$HOME/.cursor/extensions" "$HOME/.vscode/extensions"; do
     fi
 done
 
+# --- 6. tqdm bridge ---------------------------------------------------------
+echo "-> installing tqdm bridge (progress bars on the horizontal sliders)..."
+mkdir -p "$HOME/.quneo-deck/pylib" "$HOME/.quneo-deck/bars"
+cp "$DIR/pylib/sitecustomize.py" "$HOME/.quneo-deck/pylib/"
+MARK="# quneo-agent-deck tqdm bridge"
+LINE='export PYTHONPATH="$HOME/.quneo-deck/pylib${PYTHONPATH:+:$PYTHONPATH}"'
+for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
+    if [ -f "$rc" ] && ! grep -qF "$MARK" "$rc"; then
+        printf '\n%s\n%s\n' "$MARK" "$LINE" >> "$rc"
+        echo "   PYTHONPATH export added to $rc (new shells only)"
+    fi
+done
+
 # --- Done -------------------------------------------------------------------
 cat <<TXT
 

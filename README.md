@@ -35,8 +35,12 @@ window for anything else — including cluster sessions.
 - **they're also buttons**: tap left = F13 (bind to your dictation app),
   tap right = Return, both together = Esc
 
-**4 horizontal sliders = machine vitals** — LED bars for CPU, RAM, disk,
-battery (top to bottom, refreshed every 5s).
+**4 horizontal sliders = tqdm bars, else machine vitals** — any live
+Python `tqdm` progress bar (local or on your cluster) is mirrored to a
+physical LED bar, newest on top, via a zero-config `sitecustomize.py`
+bridge on `PYTHONPATH` that patches tqdm only when it's imported. When no
+bars are running, the sliders fall back to CPU / RAM / disk / battery
+(refreshed every 5s).
 
 **Long slider = the day itself** — a single dot crawling left to right,
 showing the fraction of the day elapsed. A tiny sun.

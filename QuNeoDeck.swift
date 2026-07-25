@@ -252,12 +252,57 @@ func updateSystemStats() {
     }
 }
 
+// --- tqdm bars ------------------------------------------------------------
+// The sitecustomize.py bridge mirrors every live tqdm (with a known total)
+// into ~/.quneo-deck/bars/; clusters ship theirs via poll.py. Active bars
+// preempt the vitals on the horizontal sliders, newest on top; vitals
+// return when the last bar finishes.
+struct Bar {
+    let frac: Double
+    let desc: String
+    let updated: Double
+    var remote: String? = nil
+}
+
+var remoteBars: [Bar] = []
+var currentBars: [Bar] = []
+
+func loadLocalBars() -> [Bar] {
+    let dir = NSString(string: "~/.quneo-deck/bars").expandingTildeInPath
+    let fm = FileManager.default
+    guard let files = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
+    var bars: [Bar] = []
+    let now = Date().timeIntervalSince1970
+    for f in files where f.hasSuffix(".json") {
+        let path = (dir as NSString).appendingPathComponent(f)
+        guard let data = fm.contents(atPath: path),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let frac = (obj["frac"] as? NSNumber)?.doubleValue else { continue }
+        let updated = (obj["updated"] as? NSNumber)?.doubleValue ?? 0
+        if let pid = (obj["pid"] as? NSNumber)?.int32Value, kill(pid, 0) != 0 {
+            try? fm.removeItem(atPath: path)  // reap bars of dead processes
+            continue
+        }
+        if now - updated > 6 * 3600 { continue }
+        bars.append(Bar(frac: frac, desc: obj["desc"] as? String ?? "", updated: updated))
+    }
+    return bars
+}
+
 func paintSystemStats() {
     func level(_ v: Double) -> UInt8 { UInt8(max(0, min(127, v * 127))) }
-    sendCC(11, level(statCPU))
-    sendCC(10, level(statRAM))
-    sendCC(9, level(statDisk))
-    sendCC(8, level(statBattery))
+    let bars = currentBars
+    if bars.isEmpty {
+        sendCC(11, level(statCPU))
+        sendCC(10, level(statRAM))
+        sendCC(9, level(statDisk))
+        sendCC(8, level(statBattery))
+    } else {
+        let sliderCCs: [UInt8] = [11, 10, 9, 8]  // top to bottom
+        for (i, cc) in sliderCCs.enumerated() {
+            sendCC(cc, i < bars.count ? level(bars[i].frac) : 0)
+        }
+    }
     let midnight = Calendar.current.startOfDay(for: Date())
     let dayFrac = Date().timeIntervalSince(midnight) / 86_400.0
     sendCC(5, level(dayFrac))
@@ -453,6 +498,7 @@ func pollRemotes() {
     remotePollInFlight = true
     DispatchQueue.global(qos: .utility).async {
         var collected: [Session] = []
+        var collectedBars: [Bar] = []
         var failures = 0
         for host in remotes {
             let p = Process()
@@ -465,8 +511,30 @@ func pollRemotes() {
             p.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             guard p.terminationStatus == 0,
-                  let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+                  let parsed = try? JSONSerialization.jsonObject(with: data)
             else { failures += 1; continue }
+            // poll.py speaks {"sessions": [...], "bars": [...]}; a bare
+            // array is the old sessions-only format.
+            let arr: [[String: Any]]
+            var barArr: [[String: Any]] = []
+            if let d = parsed as? [String: Any] {
+                arr = d["sessions"] as? [[String: Any]] ?? []
+                barArr = d["bars"] as? [[String: Any]] ?? []
+            } else if let a = parsed as? [[String: Any]] {
+                arr = a
+            } else {
+                failures += 1
+                continue
+            }
+            for b in barArr {
+                guard let frac = (b["frac"] as? NSNumber)?.doubleValue else { continue }
+                collectedBars.append(Bar(
+                    frac: frac,
+                    desc: b["desc"] as? String ?? "",
+                    updated: (b["updated"] as? NSNumber)?.doubleValue ?? 0,
+                    remote: host
+                ))
+            }
             for obj in arr {
                 guard let id = obj["session_id"] as? String,
                       let status = obj["status"] as? String else { continue }
@@ -490,6 +558,7 @@ func pollRemotes() {
             } else {
                 remotePollFailures = 0
                 remoteSessions = collected
+                remoteBars = collectedBars
                 playRemoteTransitions(collected)
             }
             remotePollInFlight = false
@@ -1636,6 +1705,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             scanCodex()
         }
         if tick % 20 == 1 { updateSystemStats() }  // every 5s
+        currentBars = (loadLocalBars() + remoteBars).sorted { $0.updated > $1.updated }
         let sessions = loadSessions() + remoteSessions
         captureWindowsForNewSessions(sessions)
         padSlots = assignPads(sessions)
@@ -1743,6 +1813,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let arrange = NSMenuItem(title: "Arrange Pads…", action: #selector(openArrange), keyEquivalent: "")
             arrange.target = self
             menu.addItem(arrange)
+        }
+        if !currentBars.isEmpty {
+            menu.addItem(.separator())
+            for b in currentBars.prefix(4) {
+                let cloud = b.remote != nil ? "☁️ " : ""
+                let name = b.desc.isEmpty ? "tqdm" : b.desc
+                menu.addItem(withTitle: "⏳ \(cloud)\(Int(b.frac * 100))%  \(name)",
+                             action: nil, keyEquivalent: "")
+            }
         }
         menu.addItem(.separator())
 

@@ -13,9 +13,21 @@ echo "-> checking connectivity..."
 ssh -o BatchMode=yes -o ConnectTimeout=8 "$HOST" \
     'command -v python3 >/dev/null || { echo "python3 missing on remote"; exit 1; }; echo "   connected: $(hostname)"'
 
-echo "-> deploying hook.py + poll.py..."
-ssh -o BatchMode=yes "$HOST" 'mkdir -p ~/.quneo-deck/state'
+echo "-> deploying hook.py + poll.py + tqdm bridge..."
+ssh -o BatchMode=yes "$HOST" 'mkdir -p ~/.quneo-deck/state ~/.quneo-deck/bars ~/.quneo-deck/pylib'
 scp -q "$DIR/hook.py" "$DIR/poll.py" "$HOST":.quneo-deck/
+scp -q "$DIR/pylib/sitecustomize.py" "$HOST":.quneo-deck/pylib/
+
+echo "-> adding PYTHONPATH export to remote shell rc files..."
+ssh -o BatchMode=yes "$HOST" '
+MARK="# quneo-agent-deck tqdm bridge"
+LINE="export PYTHONPATH=\"\$HOME/.quneo-deck/pylib\${PYTHONPATH:+:\$PYTHONPATH}\""
+for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
+    if [ -f "$rc" ] && ! grep -qF "$MARK" "$rc"; then
+        printf "\n%s\n%s\n" "$MARK" "$LINE" >> "$rc"
+        echo "   added to $rc"
+    fi
+done'
 
 echo "-> installing Claude Code hooks on $HOST..."
 ssh -o BatchMode=yes "$HOST" python3 <<'PYEOF'

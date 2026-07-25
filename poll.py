@@ -15,7 +15,9 @@ import sys
 import time
 
 STATE = os.path.expanduser("~/.quneo-deck/state")
+BARS = os.path.expanduser("~/.quneo-deck/bars")
 STALE_SECONDS = 48 * 3600
+BAR_STALE_SECONDS = 6 * 3600
 
 
 def ack(sid):
@@ -67,7 +69,35 @@ def main():
                 pass
             continue
         out.append(d)
-    print(json.dumps(out))
+
+    bars = []
+    if os.path.isdir(BARS):
+        for fn in os.listdir(BARS):
+            if not fn.endswith(".json"):
+                continue
+            path = os.path.join(BARS, fn)
+            try:
+                with open(path) as f:
+                    b = json.load(f)
+            except Exception:
+                continue
+            pid = b.get("pid")
+            dead = False
+            if pid and b.get("host") in (None, host):
+                try:
+                    os.kill(int(pid), 0)
+                except ProcessLookupError:
+                    dead = True
+                except Exception:
+                    pass
+            if dead or now - b.get("updated", 0) > BAR_STALE_SECONDS:
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+                continue
+            bars.append(b)
+    print(json.dumps({"sessions": out, "bars": bars}))
 
 
 if __name__ == "__main__":
