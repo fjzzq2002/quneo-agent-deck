@@ -6,8 +6,6 @@ remote clusters over ssh) and **OpenAI Codex CLI**. Every session gets a
 light-up pad, the rotaries are googly eyes that stare at whatever needs
 you, and the whole thing runs from a tiny macOS menu bar app.
 
-https://github.com/user-attachments/... *(demo video)*
-
 ## What the hardware does
 
 **16 pads = live agent sessions**
